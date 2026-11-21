@@ -3,16 +3,58 @@
 
 #include "engine/algorithm.hpp"
 #include "engine/datafacade.hpp"
+#include "engine/phantom_node.hpp"
 #include "engine/search_engine_data.hpp"
 
 #include "util/typedefs.hpp"
 
+#include <boost/assert.hpp>
+
+#include <algorithm>
+#include <tuple>
 #include <vector>
 
 namespace osrm::engine::routing_algorithms
 {
 namespace
 {
+// Called only when the two searches meet at their starting node with zero graph
+// weight. Snapping supplies one candidate per directed segment and role. Compare
+// positions on the geometry, independently of rounded weights and approach walks.
+inline bool isSourceDownstream(const NodeID node,
+                               const PhantomNodeCandidates &sources,
+                               const PhantomNodeCandidates &targets)
+{
+    const auto source = std::find_if(
+        sources.begin(),
+        sources.end(),
+        [&](const auto &phantom)
+        {
+            return (phantom.IsValidForwardSource() && phantom.forward_segment_id.id == node) ||
+                   (phantom.IsValidReverseSource() && phantom.reverse_segment_id.id == node);
+        });
+    const auto target = std::find_if(
+        targets.begin(),
+        targets.end(),
+        [&](const auto &phantom)
+        {
+            return (phantom.IsValidForwardTarget() && phantom.forward_segment_id.id == node) ||
+                   (phantom.IsValidReverseTarget() && phantom.reverse_segment_id.id == node);
+        });
+    BOOST_ASSERT(source != sources.end());
+    BOOST_ASSERT(target != targets.end());
+
+    // Every geometry segment weighs at least 1, so a zero graph weight leaves no
+    // segment between the two positions: one coordinate is one place.
+    if (source->location == target->location)
+        return false;
+
+    const auto source_position = std::tie(source->fwd_segment_position, source->forward_distance);
+    const auto target_position = std::tie(target->fwd_segment_position, target->forward_distance);
+    const bool forward = source->IsValidForwardSource() && source->forward_segment_id.id == node;
+    return forward ? source_position > target_position : source_position < target_position;
+}
+
 struct NodeBucket
 {
     NodeID middle_node;
